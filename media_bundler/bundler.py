@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import re
 from StringIO import StringIO
+import hashlib
 
 from media_bundler.conf import bundler_settings
 from media_bundler.bin_packing import Box, pack_boxes
@@ -49,6 +50,7 @@ class Bundle(object):
             raise ValueError("Bundle URLs must end with a '/'.")
         self.files = files
         self.type = type
+        self.content_hash = None
 
     @classmethod
     def check_attr(cls, attrs, attr):
@@ -81,15 +83,18 @@ class Bundle(object):
     def get_extension(self):
         raise NotImplementedError
 
-    def get_bundle_filename(self):
-        return self.name + self.get_extension()
+    def get_bundle_filename(self, unique_name=None):
+        if not unique_name:
+            import datetime
+            unique_name = datetime.datetime.now().strftime("%y%m%d%H%M%S")
+        return self.name + unique_name + self.get_extension()
 
-    def get_bundle_path(self):
-        filename = self.get_bundle_filename()
-        return os.path.join(self.path, filename)
+    def get_bundle_path(self,unique_name=None):
+        filename = self.get_bundle_filename(unique_name=unique_name)
+        return os.path.join(self.path, "sprites", filename)
 
     def get_bundle_url(self):
-        unversioned = self.get_bundle_filename()
+        unversioned = self.get_bundle_filename(unique_name=self.content_hash)
         filename = versioning.get_bundle_versions().get(self.name, unversioned)
         return self.url + filename
 
@@ -177,7 +182,8 @@ class PngSpriteBundle(Bundle):
             img = box.image
             mask = img if img.mode == "RGBA" else None
             sprite.paste(img, (left, top), mask)
-        sprite.save(self.get_bundle_path(), "PNG")
+        self.content_hash = hashlib.md5(sprite.tostring()).hexdigest()
+        sprite.save(self.get_bundle_path(unique_name=self.content_hash), "PNG")
         self._optimize_output()
         # It's *REALLY* important that this happen here instead of after the
         # generate_css() call, because if we waited, the CSS woudl have the URL
@@ -188,7 +194,7 @@ class PngSpriteBundle(Bundle):
 
     def _optimize_output(self):
         """Optimize the PNG with pngcrush."""
-        sprite_path = self.get_bundle_path()
+        sprite_path = self.get_bundle_path(self.content_hash)
         tmp_path = sprite_path + '.tmp'
         args = ['pngcrush', '-rem', 'alla', sprite_path, tmp_path]
         proc = subprocess.Popen(args, stdout=subprocess.PIPE,
@@ -221,8 +227,9 @@ class PngSpriteBundle(Bundle):
     def css_class_name(self, rule_name):
         name = self.name
         if rule_name:
-            name += "-" + rule_name
-        name = name.replace(" ", "-").replace(".", "-")
+            rule_name = rule_name[:rule_name.rfind(".")]
+            name += "_" + rule_name
+        name = name.replace(" ", "_").replace(".", "_")
         return self.CSS_REGEXP.sub("", name)
 
     def make_css(self, name, props):
